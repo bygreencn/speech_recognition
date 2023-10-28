@@ -22,12 +22,16 @@ class AudioData(object):
     Usually, instances of this class are obtained from ``recognizer_instance.record`` or ``recognizer_instance.listen``, or in the callback for ``recognizer_instance.listen_in_background``, rather than instantiating them directly.
     """
 
-    def __init__(self, frame_data, sample_rate, sample_width):
+    def __init__(self, frame_data, sample_rate, sample_width, channels):
         assert sample_rate > 0, "Sample rate must be a positive integer"
         assert (
             sample_width % 1 == 0 and 1 <= sample_width <= 4
         ), "Sample width must be between 1 and 4 inclusive"
-        self.frame_data = frame_data
+
+        if channels != 1:
+            self.frame_data = audioop.tomono(frame_data, sample_width, 1, 1)
+        else:
+            self.frame_data = frame_data
         self.sample_rate = sample_rate
         self.sample_width = int(sample_width)
 
@@ -59,6 +63,7 @@ class AudioData(object):
             self.frame_data[start_byte:end_byte],
             self.sample_rate,
             self.sample_width,
+            1
         )
 
     def get_raw_data(self, convert_rate=None, convert_width=None):

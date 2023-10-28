@@ -95,6 +95,7 @@ class Microphone(AudioSource):
         self.SAMPLE_WIDTH = self.pyaudio_module.get_sample_size(self.format)  # size of each sample
         self.SAMPLE_RATE = sample_rate  # sampling rate in Hertz
         self.CHUNK = chunk_size  # number of frames stored in each buffer
+        self.CHANNELS = int(device_info["maxInputChannels"])
 
         self.audio = None
         self.stream = None
@@ -105,13 +106,47 @@ class Microphone(AudioSource):
         Imports the pyaudio module and checks its version. Throws exceptions if pyaudio can't be found or a wrong version is installed
         """
         try:
-            import pyaudio
+            #import pyaudio
+            import pyaudiowpatch as pyaudio
         except ImportError:
             raise AttributeError("Could not find PyAudio; check installation")
         from distutils.version import LooseVersion
         if LooseVersion(pyaudio.__version__) < LooseVersion("0.2.11"):
             raise AttributeError("PyAudio 0.2.11 or later is required (found version {})".format(pyaudio.__version__))
         return pyaudio
+
+    @staticmethod
+    def list_loopback_devices():
+        """
+        Returns a list of the names of all loopback device names. For microphones where the name can't be retrieved, the list entry contains ``None`` instead.
+        
+        The index of each microphone's name in the returned list is the same as its device index when creating a ``Microphone`` instance - if you want to use the microphone at index 3 in the returned list, use ``Microphone(device_index=3)``.
+        """
+        audio = Microphone.get_pyaudio().PyAudio()
+        try:
+            # Get default WASAPI info
+            wasapi_info = audio.get_host_api_info_by_type(Microphone.get_pyaudio().paWASAPI)
+        except OSError:
+            raise AttributeError("Looks like WASAPI is not available on the system. Exiting...")
+        
+        # Get default WASAPI speakers
+        default_speakers = audio.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+
+        try:
+            result = {}
+            if not default_speakers["isLoopbackDevice"]:
+                for loopback in audio.get_loopback_device_info_generator():
+                    """
+                    Try to find loopback device with same name(and [Loopback suffix]).
+                    Unfortunately, this is the most adequate way at the moment.
+                    """
+                    if default_speakers["name"] in loopback["name"]:
+                        result[loopback.get("index")] = loopback.get("name")
+            else:
+                raise AttributeError("Default loopback output device not found.\n\nRun `python -m pyaudiowpatch` to check available devices.\nExiting...\n")
+        finally:
+            audio.terminate()
+        return result
 
     @staticmethod
     def list_microphone_names():
@@ -148,7 +183,7 @@ class Microphone(AudioSource):
                 try:
                     # read audio
                     pyaudio_stream = audio.open(
-                        input_device_index=device_index, channels=1, format=pyaudio_module.paInt16,
+                        input_device_index=device_index, channels=int(device_info["maxInputChannels"]), format=pyaudio_module.paInt16,
                         rate=int(device_info["defaultSampleRate"]), input=True
                     )
                     try:
@@ -176,11 +211,12 @@ class Microphone(AudioSource):
         try:
             self.stream = Microphone.MicrophoneStream(
                 self.audio.open(
-                    input_device_index=self.device_index, channels=1, format=self.format,
+                    input_device_index=self.device_index, channels=self.CHANNELS, format=self.format,
                     rate=self.SAMPLE_RATE, frames_per_buffer=self.CHUNK, input=True,
                 )
             )
-        except Exception:
+        except Exception as err:
+            print(err)
             self.audio.terminate()
         return self
 
@@ -233,6 +269,7 @@ class AudioFile(AudioSource):
         self.SAMPLE_RATE = None
         self.CHUNK = None
         self.FRAME_COUNT = None
+        self.CHANNELS = None
 
     def __enter__(self):
         assert self.stream is None, "This audio source is already inside a context manager"
@@ -274,6 +311,8 @@ class AudioFile(AudioSource):
                     raise ValueError("Audio file could not be read as PCM WAV, AIFF/AIFF-C, or Native FLAC; check if file is corrupted or in another format")
                 self.little_endian = False  # AIFF is a big-endian format
         assert 1 <= self.audio_reader.getnchannels() <= 2, "Audio must be mono or stereo"
+        self.CHANNELS = self.audio_reader.getnchannels()
+        
         self.SAMPLE_WIDTH = self.audio_reader.getsampwidth()
 
         # 24-bit audio needs some special handling for old Python versions (workaround for https://bugs.python.org/issue12866)
@@ -289,6 +328,7 @@ class AudioFile(AudioSource):
         self.FRAME_COUNT = self.audio_reader.getnframes()
         self.DURATION = self.FRAME_COUNT / float(self.SAMPLE_RATE)
         self.stream = AudioFile.AudioFileStream(self.audio_reader, self.little_endian, samples_24_bit_pretending_to_be_32_bit)
+        self.CHANNELS = 1  # changed ad AudioFileStream
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -369,7 +409,7 @@ class Recognizer(AudioSource):
 
         frame_data = frames.getvalue()
         frames.close()
-        return AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
+        return AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH, source.CHANNELS)
 
     def adjust_for_ambient_noise(self, source, duration=1):
         """
@@ -542,7 +582,7 @@ class Recognizer(AudioSource):
         for i in range(pause_count - non_speaking_buffer_count): frames.pop()  # remove extra non-speaking frames at the end
         frame_data = b"".join(frames)
 
-        return AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH)
+        return AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH, source.CHANNELS)
 
     def listen_in_background(self, source, callback, phrase_time_limit=None):
         """
@@ -670,7 +710,7 @@ class Recognizer(AudioSource):
         if hypothesis is not None: return hypothesis.hypstr
         raise UnknownValueError()  # no transcriptions available
 
-    def recognize_google(self, audio_data, key=None, language="en-US", pfilter=0, show_all=False, with_confidence=False):
+    def recognize_google(self, audio_data, key=None, language="en-US", pfilter=0, show_all=False, with_confidence=False, proxies=None):
         """
         Performs speech recognition on ``audio_data`` (an ``AudioData`` instance), using the Google Speech Recognition API.
 
@@ -702,6 +742,7 @@ class Recognizer(AudioSource):
             "pFilter": pfilter
         }))
         request = Request(url, data=flac_data, headers={"Content-Type": "audio/x-flac; rate={}".format(audio_data.sample_rate)})
+        request.set_proxy(proxies["http"], "http")
 
         # obtain audio transcription results
         try:
