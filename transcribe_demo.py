@@ -28,9 +28,9 @@ def main():
                         help="microphone can be set if it supported; Loopback device only can not be set.", type=int)
     parser.add_argument("--energy_threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
-    parser.add_argument("--record_timeout", default=2,
+    parser.add_argument("--record_timeout", default=30,
                         help="How real time the recording is in seconds.", type=float)
-    parser.add_argument("--phrase_timeout", default=3,
+    parser.add_argument("--phrase_timeout", default=10,
                         help="How much empty space between recordings before we "
                              "consider it a new line in the transcription.", type=float)
 
@@ -121,18 +121,20 @@ def main():
 
                 # If enough time has passed between recordings, consider the phrase complete.
                 # Clear the current working audio buffer to start over with the new data.
-                if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
+                if now - phrase_time > timedelta(seconds=phrase_timeout):
                     last_sample = bytes()
+                    # This is the last time we received new audio data from the queue.
+                    phrase_time = now
+                    print(phrase_time)
                 else:
                     continue
-                # This is the last time we received new audio data from the queue.
-                phrase_time = now
+
 
                 # Concatenate our current audio data with the latest audio data.
-                for item in range(5):
-                    while not data_queue.empty():
-                        data = data_queue.get()
-                        last_sample += data
+                last_sample = data_queue.get()
+                # while not data_queue.empty():
+                #    data = data_queue.get()
+                #    last_sample += data
 
                 # Use AudioData to convert the raw data to wav data.
                 audio_data = sr.AudioData(last_sample, 16000, 2, 1)
@@ -171,7 +173,7 @@ def main():
 
     # do some more unrelated things
     while True:
-        time.sleep(0.1)  # we're not listening anymore, even though the background thread might still be running for a second or two while cleaning up and stopping
+        sleep(0.5)  # we're not listening anymore, even though the background thread might still be running for a second or two while cleaning up and stopping
     print("\n\nTranscription:")
     for line in transcription:
         print(line)
