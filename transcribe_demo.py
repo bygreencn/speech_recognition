@@ -11,7 +11,7 @@ import faster_whisper
 
 
 from datetime import datetime, timedelta
-from queue import Queue
+from queue import Queue, Full, Empty
 from tempfile import NamedTemporaryFile
 from time import sleep
 from sys import platform
@@ -21,12 +21,37 @@ exit_program = False
 def exit_handler():
     global exit_program
     exit_program = True
-    print("Will Finish recording")
+    print("Will exit program")
+
+pageup_program = False
+def pageup_handler():
+    global pageup_program
+    pageup_program = True
+    print("*Empty the processing buffer")
+
+pagedown_program = False
+def pagedown_handler():
+    global pagedown_program
+    pagedown_program = True
+    print("*Double process the buffer")
+
+
 
 def main():
+    global pageup_program
+    global pagedown_program
+
+    print("\n**You can stop recording by press End key**")
+    print("**You can empty the buffer by press Page-Up key**")
+    print("**You can double process the buffer by press Page-Down key**")
+
+    keyboard.add_hotkey('end', exit_handler)
+    keyboard.add_hotkey('page up', pageup_handler)
+    keyboard.add_hotkey('page down', pagedown_handler)
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="small", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large"])
+    parser.add_argument("--model", default="tiny", help="Model to use",
+                        choices=["tiny", "base", "small", "medium", "large-v2"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
     parser.add_argument("--audio_device_index", default=10,
@@ -35,7 +60,7 @@ def main():
                         help="microphone can be set if it supported; Loopback device only can not be set.", type=int)
     parser.add_argument("--energy_threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
-    parser.add_argument("--record_timeout", default=5,
+    parser.add_argument("--record_timeout", default=1,
                         help="How real time the recording is in seconds.", type=float)
     parser.add_argument("--phrase_timeout", default=0,
                         help="How much empty space between recordings before we "
@@ -46,8 +71,10 @@ def main():
                         help="the language of the audio.", type=str)
     parser.add_argument("--no_translate", action="store_true",
                         help="Not tanslate the language of audio to English.")
-    parser.add_argument("--process_max_buffer_count", default=5,
-                        help="the language of the audio.", type=int)
+    parser.add_argument("--process_min_buffer_count", default=5,
+                        help="the count of the language of the audio should be waited.", type=int)
+    parser.add_argument("--process_max_buffer_count", default=20,
+                        help="the count of the language of the audio should be processed.", type=int)
 
     args = parser.parse_args()
 
@@ -62,7 +89,7 @@ def main():
     recorder = sr.Recognizer()
     recorder.energy_threshold = args.energy_threshold
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = False
+    recorder.dynamic_energy_threshold = True
 
     # Prevents permanent application hang and crash by using the wrong Microphone
 
@@ -123,42 +150,60 @@ def main():
         # Grab the raw bytes and push it into the thread safe queue.
         data = audio.get_raw_data(convert_rate=16000, convert_width=2)
         data_queue.put(data)
+        sleep(0.1)
 
     # Create a background thread that will pass us raw audio bytes.
     # We could do this manually but SpeechRecognizer provides a nice helper.
     stop_listening = recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
 
     # Cue the user that we're ready to go.
-    print("Model loaded.\n")
+    print("**Model loaded.\n")
     phrase_time = datetime.utcnow()
-    print("\n**You can stop recording by press ESC key**")
-    keyboard.add_hotkey('ESC', exit_handler)
 
     while True:
+        if exit_program: break
 
         now = datetime.utcnow()
         # Pull raw recorded audio from the queue.
         if not data_queue.empty():
-            print("buffer size={}".format(data_queue.qsize()))
+
+            if data_queue.qsize()<args.process_min_buffer_count:
+                continue
+
             # If enough time has passed between recordings, consider the phrase complete.
             # Clear the current working audio buffer to start over with the new data.
             if now - phrase_time > timedelta(seconds=phrase_timeout):
                 last_sample = bytes()
-                    # This is the last time we received new audio data from the queue.
                 phrase_time = now
                 print(phrase_time)
             else:
                 continue
 
             # Concatenate our current audio data with the latest audio data.
-            #last_sample = data_queue.get()
+            
+            if pageup_program:
+                try:
+                    while True:
+                        data_queue.get_nowait()
+                except Empty:
+                    pass
+                pageup_program = False
+                continue
+
+            if pagedown_program:
+                max_count = (args.process_max_buffer_count*2)
+                pagedown_program = False
+            else:
+                max_count = (args.process_max_buffer_count)
             precess_count = 0
             while not data_queue.empty():
                 data = data_queue.get()
                 last_sample += data
                 precess_count += 1
-                if precess_count > args.process_max_buffer_count:
+                if precess_count > max_count:
                     break
+            
+            print("*[{}]".format(data_queue.qsize()))
 
             # Use AudioData to convert the raw data to wav data.
             audio_data = sr.AudioData(last_sample, 16000, 2, 1)
@@ -176,7 +221,7 @@ def main():
             found_text = list()
             for segment in segments:
                 found_text.append(segment.text)
-            text = '.'.join(found_text).strip()
+            text = ' '.join(found_text).strip()
 
             print(text)
             # Clear the console to reprint the updated transcription.
@@ -187,17 +232,19 @@ def main():
             # Flush stdout.
             print('', end='', flush=True)
 
-        if exit_program:
-            break
         # Infinite loops are bad for processors, must sleep.
         sleep(0.25)
+
     keyboard.remove_hotkey(exit_handler)
+    keyboard.remove_hotkey(pageup_handler)
+    keyboard.remove_hotkey(pagedown_handler)
 
     # calling this function requests that the background listener stop listening
     stop_listening(wait_for_stop=False)
 
     # do some more unrelated things
-    sleep(1)  # we're not listening anymore, even though the background thread might still be running for a second or two while cleaning up and stopping
+    sleep(0.5)  # we're not listening anymore, even though the background thread might still be running for a second or two while cleaning up and stopping
+
     #print("\n\nTranscription:")
     #for line in transcription:
     #    print(line)
