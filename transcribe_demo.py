@@ -50,7 +50,7 @@ def main():
     keyboard.add_hotkey('page down', pagedown_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="tiny", help="Model to use",
+    parser.add_argument("--model", default="small", help="Model to use",
                         choices=["tiny", "base", "small", "medium", "large-v2"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
@@ -58,9 +58,9 @@ def main():
                         help="microphone or loopback device to be listening.", type=int)
     parser.add_argument("--sample_rate", default=None,
                         help="microphone can be set if it supported; Loopback device only can not be set.", type=int)
-    parser.add_argument("--energy_threshold", default=1000,
+    parser.add_argument("--energy_threshold", default=2000,
                         help="Energy level for mic to detect.", type=int)
-    parser.add_argument("--record_timeout", default=1,
+    parser.add_argument("--record_timeout", default=2,
                         help="How real time the recording is in seconds.", type=float)
     parser.add_argument("--phrase_timeout", default=0,
                         help="How much empty space between recordings before we "
@@ -71,9 +71,11 @@ def main():
                         help="the language of the audio.", type=str)
     parser.add_argument("--no_translate", action="store_true",
                         help="Not tanslate the language of audio to English.")
+    parser.add_argument("--vad", action="store_false",
+                        help="Enable vad filter.")
     parser.add_argument("--process_min_buffer_count", default=5,
                         help="the count of the language of the audio should be waited.", type=int)
-    parser.add_argument("--process_max_buffer_count", default=20,
+    parser.add_argument("--process_max_buffer_count", default=15,
                         help="the count of the language of the audio should be processed.", type=int)
 
     args = parser.parse_args()
@@ -89,7 +91,7 @@ def main():
     recorder = sr.Recognizer()
     recorder.energy_threshold = args.energy_threshold
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = True
+    recorder.dynamic_energy_threshold = False
 
     # Prevents permanent application hang and crash by using the wrong Microphone
 
@@ -131,7 +133,10 @@ def main():
     language = args.language
     translate = True if not args.no_translate else False
     
-    whisper_model = faster_whisper.WhisperModel(model_size_or_path, device=device, compute_type=compute_type)
+    whisper_model = faster_whisper.WhisperModel(
+        model_size_or_path,
+        device=device,
+        compute_type=compute_type)
     
 
     record_timeout = args.record_timeout
@@ -141,6 +146,7 @@ def main():
 
     with source:
         recorder.adjust_for_ambient_noise(source)
+        print("Set minimum energy threshold to {}".format(recorder.energy_threshold))
 
     def record_callback(_, audio:sr.AudioData) -> None:
         """
@@ -167,7 +173,8 @@ def main():
         # Pull raw recorded audio from the queue.
         if not data_queue.empty():
 
-            if data_queue.qsize()<args.process_min_buffer_count:
+            if data_queue.qsize() < args.process_min_buffer_count:
+                sleep(0)
                 continue
 
             # If enough time has passed between recordings, consider the phrase complete.
@@ -177,6 +184,7 @@ def main():
                 phrase_time = now
                 print(phrase_time)
             else:
+                sleep(0)
                 continue
 
             # Concatenate our current audio data with the latest audio data.
@@ -185,6 +193,7 @@ def main():
                 try:
                     while True:
                         data_queue.get_nowait()
+                        sleep(0)
                 except Empty:
                     pass
                 pageup_program = False
@@ -202,6 +211,7 @@ def main():
                 precess_count += 1
                 if precess_count > max_count:
                     break
+                sleep(0)
             
             print("*[{}]".format(data_queue.qsize()))
 
@@ -217,23 +227,24 @@ def main():
                 beam_size=beam_size,
                 language=language,
                 task="translate" if translate else "transcribe",
-            )
+                without_timestamps=True,
+                vad_filter=args.vad)
             found_text = list()
             for segment in segments:
                 found_text.append(segment.text)
             text = ' '.join(found_text).strip()
 
-            print(text)
+            print(text, end='\n', flush=True)
             # Clear the console to reprint the updated transcription.
             # transcription.append(text)
-            #os.system('cls' if os.name=='nt' else 'clear')
+            # os.system('cls' if os.name=='nt' else 'clear')
             # for line in transcription:
             #    print(line)
             # Flush stdout.
-            print('', end='', flush=True)
+            #print('', end='', flush=True)
 
         # Infinite loops are bad for processors, must sleep.
-        sleep(0.25)
+        sleep(0)
 
     keyboard.remove_hotkey(exit_handler)
     keyboard.remove_hotkey(pageup_handler)
