@@ -384,7 +384,7 @@ class Recognizer(AudioSource):
         self.operation_timeout = None  # seconds after an internal operation (e.g., an API request) starts before it times out, or ``None`` for no timeout
 
         self.phrase_threshold = 0.3  # minimum seconds of speaking audio before we consider the speaking audio a phrase - values below this are ignored (for filtering out clicks and pops)
-        self.non_speaking_duration = 0.5  # seconds of non-speaking audio to keep on both sides of the recording
+        #self.non_speaking_duration = 0.5  # seconds of non-speaking audio to keep on both sides of the recording
 
     def record(self, source, duration=None, offset=None):
         """
@@ -512,7 +512,8 @@ class Recognizer(AudioSource):
         """
         assert isinstance(source, AudioSource), "Source must be an audio source"
         assert source.stream is not None, "Audio source must be entered before listening, see documentation for ``AudioSource``; are you using ``source`` outside of a ``with`` statement?"
-        assert self.pause_threshold >= self.non_speaking_duration >= 0
+        #assert self.pause_threshold >= self.non_speaking_duration >= 0
+        assert self.pause_threshold >= 0
         if snowboy_configuration is not None:
             assert os.path.isfile(os.path.join(snowboy_configuration[0], "snowboydetect.py")), "``snowboy_configuration[0]`` must be a Snowboy root directory containing ``snowboydetect.py``"
             for hot_word_file in snowboy_configuration[1]:
@@ -521,7 +522,7 @@ class Recognizer(AudioSource):
         seconds_per_buffer = float(source.CHUNK) / source.SAMPLE_RATE
         pause_buffer_count = int(math.ceil(self.pause_threshold / seconds_per_buffer))  # number of buffers of non-speaking audio during a phrase, before the phrase should be considered complete
         phrase_buffer_count = int(math.ceil(self.phrase_threshold / seconds_per_buffer))  # minimum number of buffers of speaking audio before we consider the speaking audio a phrase
-        non_speaking_buffer_count = int(math.ceil(self.non_speaking_duration / seconds_per_buffer))  # maximum number of buffers of non-speaking audio to retain before and after a phrase
+        #non_speaking_buffer_count = int(math.ceil(self.non_speaking_duration / seconds_per_buffer))  # maximum number of buffers of non-speaking audio to retain before and after a phrase
 
         # read audio input for phrases until there is a phrase that is long enough
         elapsed_time = 0  # number of seconds of audio read
@@ -540,8 +541,8 @@ class Recognizer(AudioSource):
                     buffer = source.stream.read(source.CHUNK)
                     if len(buffer) == 0: break  # reached end of the stream
                     frames.append(buffer)
-                    if len(frames) > non_speaking_buffer_count:  # ensure we only keep the needed amount of non-speaking buffers
-                        frames.popleft()
+                    #if len(frames) > non_speaking_buffer_count:  # ensure we only keep the needed amount of non-speaking buffers
+                    #    frames.popleft()
 
                     # detect whether speaking has started on audio input
                     energy = audioop.rms(buffer, source.SAMPLE_WIDTH)  # energy of the audio signal
@@ -590,7 +591,8 @@ class Recognizer(AudioSource):
             if phrase_count >= phrase_buffer_count or len(buffer) == 0: break  # phrase is long enough or we've reached the end of the stream, so stop listening
 
         # obtain frame data
-        for i in range(pause_count - non_speaking_buffer_count): frames.pop()  # remove extra non-speaking frames at the end
+        #for i in range(pause_count - non_speaking_buffer_count): frames.pop()  # remove extra non-speaking frames at the end
+        for i in range(pause_count): frames.pop()  # remove extra non-speaking frames at the end
         frame_data = b"".join(frames)
 
         return AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH, source.CHANNELS)
