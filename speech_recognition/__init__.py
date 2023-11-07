@@ -19,7 +19,7 @@ import hashlib
 import hmac
 import time
 import uuid
-
+from time import sleep
 try:
     import requests
 except (ModuleNotFoundError, ImportError):
@@ -53,7 +53,6 @@ class AudioSource(object):
 
     def __exit__(self, exc_type, exc_value, traceback):
         raise NotImplementedError("this is an abstract class")
-
 
 class Microphone(AudioSource):
     """
@@ -187,7 +186,9 @@ class Microphone(AudioSource):
                         rate=int(device_info["defaultSampleRate"]), input=True
                     )
                     try:
-                        buffer = pyaudio_stream.read(1024)
+                        available = pyaudio_stream.get_read_available()
+                        if available > 0:
+                            buffer = pyaudio_stream.read(available)
                         if not pyaudio_stream.is_stopped(): pyaudio_stream.stop_stream()
                     finally:
                         pyaudio_stream.close()
@@ -230,6 +231,9 @@ class Microphone(AudioSource):
     class MicrophoneStream(object):
         def __init__(self, pyaudio_stream):
             self.pyaudio_stream = pyaudio_stream
+
+        def get_read_available(self):
+            return self.pyaudio_stream.get_read_available()
 
         def read(self, size):
             return self.pyaudio_stream.read(size, exception_on_overflow=False)
@@ -331,6 +335,7 @@ class AudioFile(AudioSource):
         self.CHANNELS = 1  # changed ad AudioFileStream
         return self
 
+
     def __exit__(self, exc_type, exc_value, traceback):
         if not hasattr(self.filename_or_fileobject, "read"):  # only close the file if it was opened by this class in the first place (if the file was originally given as a path)
             self.audio_reader.close()
@@ -342,6 +347,9 @@ class AudioFile(AudioSource):
             self.audio_reader = audio_reader  # an audio file object (e.g., a `wave.Wave_read` instance)
             self.little_endian = little_endian  # whether the audio data is little-endian (when working with big-endian things, we'll have to convert it to little-endian before we process it)
             self.samples_24_bit_pretending_to_be_32_bit = samples_24_bit_pretending_to_be_32_bit  # this is true if the audio is 24-bit audio, but 24-bit audio isn't supported, so we have to pretend that this is 32-bit audio and convert it on the fly
+
+        def get_read_available(self):
+            return (self.audio_reader.getnframes() - self.audio_reader.tell())
 
         def read(self, size=-1):
             buffer = self.audio_reader.readframes(self.audio_reader.getnframes() if size == -1 else size)
@@ -399,15 +407,16 @@ class Recognizer(AudioSource):
                     offset_reached = True
 
             buffer = source.stream.read(source.CHUNK)
-            if len(buffer) == 0: break
+            if len(buffer) == 0: break  # reached end of the stream
 
             if offset_reached or not offset:
                 elapsed_time += seconds_per_buffer
                 if duration and elapsed_time > duration: break
 
                 frames.write(buffer)
+            sleep(0)
 
-        frame_data = frames.getvalue()
+        frame_data=frames.getvalue()
         frames.close()
         return AudioData(frame_data, source.SAMPLE_RATE, source.SAMPLE_WIDTH, source.CHANNELS)
 
@@ -543,6 +552,7 @@ class Recognizer(AudioSource):
                         damping = self.dynamic_energy_adjustment_damping ** seconds_per_buffer  # account for different chunk sizes and rates
                         target_energy = energy * self.dynamic_energy_ratio
                         self.energy_threshold = self.energy_threshold * damping + target_energy * (1 - damping)
+                    sleep(0)
             else:
                 # read audio input until the hotword is said
                 snowboy_location, snowboy_hot_word_files = snowboy_configuration
@@ -573,6 +583,7 @@ class Recognizer(AudioSource):
                     pause_count += 1
                 if pause_count > pause_buffer_count:  # end of the phrase
                     break
+                sleep(0)
 
             # check how long the detected phrase is, and retry listening if the phrase is too short
             phrase_count -= pause_count  # exclude the buffers for the pause before the phrase
@@ -602,10 +613,12 @@ class Recognizer(AudioSource):
                 while running[0]:
                     try:  # listen for 1 second, then check again if the stop function has been called
                         audio = self.listen(s, 1, phrase_time_limit)
+                        sleep(0)
                     except WaitTimeoutError:  # listening timed out, just try again
                         pass
                     else:
                         if running[0]: callback(self, audio)
+                    sleep(0)
 
         def stopper(wait_for_stop=True):
             running[0] = False
