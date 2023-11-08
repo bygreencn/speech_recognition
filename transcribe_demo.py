@@ -1,4 +1,4 @@
-#! python3.7
+#! python3.8
 
 import argparse
 import io
@@ -50,11 +50,13 @@ def main():
     keyboard.add_hotkey('page down', pagedown_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="small", help="Model to use",
+    parser.add_argument("-m","--model", default="small", help="Model to use",
                         choices=["tiny", "base", "small", "medium", "large-v2"])
     parser.add_argument("--non_english", action='store_true',
                         help="Don't use the english model.")
-    parser.add_argument("--audio_device_index", default=10,
+    parser.add_argument("-i","--audio_file", 
+                        help="read audio file for transcribe.", type=str)
+    parser.add_argument("-d","--audio_device_index", default=10,
                         help="microphone or loopback device to be listening.", type=int)
     parser.add_argument("--sample_rate", default=None,
                         help="microphone can be set if it supported; Loopback device only can not be set.", type=int)
@@ -67,7 +69,7 @@ def main():
                              "consider it a new line in the transcription.", type=float)
     parser.add_argument("--gpu", action="store_true",
                         help="process the audio with GPU.")
-    parser.add_argument("--language", default="zh",
+    parser.add_argument("-l","--language", default="zh",
                         help="the language of the audio.", type=str)
     parser.add_argument("--no_translate", action="store_true",
                         help="Not tanslate the language of audio to English.")
@@ -80,39 +82,79 @@ def main():
 
     args = parser.parse_args()
 
-    print("*You should play some sound to make code found the corrent ambient_noise*")
     # The last time a recording was retrieved from the queue.
     phrase_time = None
     # Current raw audio bytes.
     last_sample = bytes()
     # Thread safe Queue for passing data from the threaded recording callback.
     data_queue = Queue()
+
+    record_timeout = args.record_timeout
+    phrase_timeout = args.phrase_timeout
+    
+    '''
+    Prepare speech recognition for audio get
+    '''
     # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
     recorder = sr.Recognizer()
-    recorder.energy_threshold = args.energy_threshold
-    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = False
 
-    # Prevents permanent application hang and crash by using the wrong Microphone
-
-    audio_device_index = args.audio_device_index
-    if audio_device_index is None:
-        print("Available microphone devices and Loopback devices are: ")
-        microphone_name = sr.Microphone.list_working_microphones()
-        for index in microphone_name:
-            print(f"Microphone with name \"{microphone_name[index]}(device_index={index})\" found")
-        loopback_device_name = sr.Microphone.list_loopback_devices()
-        for index in loopback_device_name:
-            print(f"Loopback Device with name \"{loopback_device_name[index]}(device_index={index})\" found")
-        return
-    else:
+    if args.audio_file is not None and os.path.isfile(args.audio_file):
         try:
-            source = sr.Microphone(device_index=audio_device_index, sample_rate=args.sample_rate)
+            source = sr.AudioFile(args.audio_file)
         except Exception as err:
             print(err)
             return
+    else:
+        recorder.energy_threshold = args.energy_threshold
+        # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
+        recorder.dynamic_energy_threshold = False
 
+        # Prevents permanent application hang and crash by using the wrong Microphone
 
+        audio_device_index = args.audio_device_index
+        if audio_device_index is None:
+            print("Available microphone devices and Loopback devices are: ")
+            microphone_name = sr.Microphone.list_working_microphones()
+            for index in microphone_name:
+                print(f"Microphone with name \"{microphone_name[index]}(device_index={index})\" found")
+            loopback_device_name = sr.Microphone.list_loopback_devices()
+            for index in loopback_device_name:
+                print(f"Loopback Device with name \"{loopback_device_name[index]}(device_index={index})\" found")
+            return
+        else:
+            try:
+                source = sr.Microphone(device_index=audio_device_index, sample_rate=args.sample_rate)
+            except Exception as err:
+                print(err)
+                return
+        
+        print("*You should play some sound to make code found the corrent ambient_noise*")
+        with source:
+            recorder.adjust_for_ambient_noise(source)
+            print("Set minimum energy threshold to {}".format(recorder.energy_threshold))
+
+    
+    '''
+    Prepare speech recognition for audio listening
+    '''
+
+    def record_callback(_, audio:sr.AudioData) -> None:
+        """
+        Threaded callback function to receive audio data when recordings finish.
+        audio: An AudioData containing the recorded bytes.
+        """
+        # Grab the raw bytes and push it into the thread safe queue.
+        data = audio.get_raw_data(convert_rate=16000, convert_width=2)
+        data_queue.put(data)
+        sleep(0.1)
+
+    # Create a background thread that will pass us raw audio bytes.
+    # We could do this manually but SpeechRecognizer provides a nice helper.
+    stop_listening = recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
+
+    '''
+    Prepare faster whisper 
+    '''
     models_path = "F:\\Src.Disk\\speech_recognition\\speech_recognition\\recognizers\\models"
     
     models = {'base': os.path.join(models_path, "base"),
@@ -139,28 +181,7 @@ def main():
         compute_type=compute_type)
     
 
-    record_timeout = args.record_timeout
-    phrase_timeout = args.phrase_timeout
-
     #transcription = ['']
-
-    with source:
-        recorder.adjust_for_ambient_noise(source)
-        print("Set minimum energy threshold to {}".format(recorder.energy_threshold))
-
-    def record_callback(_, audio:sr.AudioData) -> None:
-        """
-        Threaded callback function to receive audio data when recordings finish.
-        audio: An AudioData containing the recorded bytes.
-        """
-        # Grab the raw bytes and push it into the thread safe queue.
-        data = audio.get_raw_data(convert_rate=16000, convert_width=2)
-        data_queue.put(data)
-        sleep(0.1)
-
-    # Create a background thread that will pass us raw audio bytes.
-    # We could do this manually but SpeechRecognizer provides a nice helper.
-    stop_listening = recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
 
     # Cue the user that we're ready to go.
     print("**Model loaded.\n")
