@@ -24,6 +24,8 @@ def main():
                         help="Write audio file to.", type=str)
     parser.add_argument("-d","--audio_device_index", default=10,
                         help="microphone or loopback device to be listening.", type=int)
+    parser.add_argument("--energy_threshold", default=2000,
+                        help="Energy level for mic to detect.", type=int)
     args = parser.parse_args()
 
     filename = os.path.splitext(args.audio_file.lower())[0]
@@ -46,6 +48,9 @@ def main():
         return
 
     print("*You should play some sound to make code found the corrent ambient_noise*")
+    recorder.energy_threshold = args.energy_threshold
+    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
+    recorder.dynamic_energy_threshold = False
     with source:
         recorder.adjust_for_ambient_noise(source)
 
