@@ -9,6 +9,8 @@ from queue import Queue
 from time import sleep
 import keyboard
 import wave
+import argparse
+
 
 exit_program = False
 def exit_handler():
@@ -16,25 +18,34 @@ def exit_handler():
     exit_program = True
     print("Will Finish recording")
 
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-o","--audio_file", required=True, 
+                        help="Write audio file to.", type=str)
+    parser.add_argument("-d","--audio_device_index", default=10,
+                        help="microphone or loopback device to be listening.", type=int)
+    args = parser.parse_args()
+
+    filename = os.path.splitext(args.audio_file.lower())[0]
+    filename += ".wav"
+    if os.path.exists(filename):
+        raise FileExistsError(filename)
 
 
-def main(filename: str = "recorder.wav"):
-    
-    print("*You should play some sound to make code found the corrent ambient_noise*")
     # Current raw audio bytes.
     last_sample = bytes()
     # Thread safe Queue for passing data from the threaded recording callback.
     data_queue = Queue()
     # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
     recorder = sr.Recognizer()
-
+    
     try:
-        source = sr.Microphone(device_index=10)
+        source = sr.Microphone(device_index=args.audio_device_index)
     except Exception as err:
         print(err)
         return
 
-
+    print("*You should play some sound to make code found the corrent ambient_noise*")
     with source:
         recorder.adjust_for_ambient_noise(source)
 
