@@ -8,7 +8,8 @@ import speech_recognition as sr
 import numpy as np
 import soundfile as sf
 import faster_whisper
-
+import wave
+import gc
 
 from datetime import datetime, timedelta
 from queue import Queue, Full, Empty
@@ -56,6 +57,8 @@ def main():
                         help="Don't use the english model.")
     parser.add_argument("-i","--audio_file", 
                         help="read audio file for transcribe.", type=str)
+    parser.add_argument("-o","--output_audio_file", 
+                        help="output resorded audio wav file.", type=str)
     parser.add_argument("-d","--audio_device_index", default=10,
                         help="microphone or loopback device to be listening.", type=int)
     parser.add_argument("--sample_rate", default=None,
@@ -91,7 +94,13 @@ def main():
 
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
-    
+
+    if args.output_audio_file is not None:
+        output_filename = os.path.splitext(args.output_audio_file.lower())[0]
+        output_filename += ".wav"
+    else:
+        output_filename = None
+
     '''
     Prepare speech recognition for audio get
     '''
@@ -99,6 +108,7 @@ def main():
     recorder = sr.Recognizer()
 
     if args.audio_file is not None and os.path.isfile(args.audio_file):
+        output_filename = None
         try:
             source = sr.AudioFile(args.audio_file)
         except Exception as err:
@@ -148,6 +158,11 @@ def main():
         data_queue.put(data)
         sleep(0.1)
 
+    if output_filename is not None:
+        wavfile = wave.open(output_filename, 'wb')
+        wavfile.setframerate(16000)
+        wavfile.setsampwidth(2)
+        wavfile.setnchannels(1)
     # Create a background thread that will pass us raw audio bytes.
     # We could do this manually but SpeechRecognizer provides a nice helper.
     stop_listening = recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
@@ -235,7 +250,9 @@ def main():
                 sleep(0)
             
             print("*[{}]".format(data_queue.qsize()))
-
+            
+            if output_filename is not None:
+                wavfile.writeframes(last_sample)
             # Use AudioData to convert the raw data to wav data.
             audio_data = sr.AudioData(last_sample, 16000, 2, 1)
             wav_stream = io.BytesIO(audio_data.get_wav_data())
@@ -255,6 +272,9 @@ def main():
                 found_text.append(segment.text)
             text = ' '.join(found_text).strip()
 
+            del last_sample
+            gc.collect()
+
             print(text, end='\n', flush=True)
             # Clear the console to reprint the updated transcription.
             # transcription.append(text)
@@ -273,6 +293,19 @@ def main():
 
     # calling this function requests that the background listener stop listening
     stop_listening(wait_for_stop=False)
+    
+    if output_filename is not None:
+        if not data_queue.empty():
+            last_sample = bytes()
+            while not data_queue.empty():
+                data = data_queue.get()
+                last_sample += data
+            wavfile.writeframes(last_sample)
+            del last_sample
+            gc.collect()
+        wavfile.close()
+        
+        
 
     # do some more unrelated things
     sleep(0.5)  # we're not listening anymore, even though the background thread might still be running for a second or two while cleaning up and stopping

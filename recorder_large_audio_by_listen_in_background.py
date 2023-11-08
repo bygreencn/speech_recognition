@@ -9,6 +9,7 @@ from queue import Queue
 from time import sleep
 import keyboard
 import wave
+import gc
 import argparse
 
 
@@ -20,7 +21,7 @@ def exit_handler():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-o","--audio_file", required=True, 
+    parser.add_argument("-o","--audio_file", required=True,
                         help="Write audio file to.", type=str)
     parser.add_argument("-d","--audio_device_index", default=10,
                         help="microphone or loopback device to be listening.", type=int)
@@ -30,12 +31,9 @@ def main():
 
     filename = os.path.splitext(args.audio_file.lower())[0]
     filename += ".wav"
-    if os.path.exists(filename):
-        raise FileExistsError(filename)
+    #if os.path.exists(filename): raise FileExistsError(filename)
 
 
-    # Current raw audio bytes.
-    last_sample = bytes()
     # Thread safe Queue for passing data from the threaded recording callback.
     data_queue = Queue()
     # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
@@ -76,27 +74,23 @@ def main():
     keyboard.add_hotkey('end', exit_handler)
 
     while True:
-        
         if not data_queue.empty():
             last_sample = bytes()
             while not data_queue.empty():
                 data = data_queue.get()
                 last_sample += data
-
-            # Use AudioData to convert the raw data to wav data.
-            audio_data = sr.AudioData(last_sample, 16000, 2, 1)
-            wavfile.writeframes(audio_data.get_wav_data())
+            wavfile.writeframes(last_sample)
+            del last_sample
+            gc.collect()
         if exit_program:
+            # calling this function requests that the background listener stop listening
+            stop_listening(wait_for_stop=False)
             break
         # Infinite loops are bad for processors, must sleep.
         sleep(0.25)
         
     keyboard.remove_hotkey(exit_handler)
     wavfile.close()
-
-
-    # calling this function requests that the background listener stop listening
-    stop_listening(wait_for_stop=False)
 
     # do some more unrelated things
     sleep(2)  # we're not listening anymore, even though the background thread might still be running for a second or two while cleaning up and stopping
